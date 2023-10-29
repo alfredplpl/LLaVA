@@ -7,6 +7,7 @@ from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_S
 from llava.model.builder import load_pretrained_model
 from llava.utils import disable_torch_init
 from llava.mm_utils import process_images, tokenizer_image_token, get_model_name_from_path
+from llava.conversation import conv_templates
 
 from PIL import Image
 
@@ -14,7 +15,7 @@ import pandas as pd
 import glob
 from tqdm import tqdm
 
-def generate_texts(args,paths,model,tokenizer,image_processor,prompt,eos_token_id,start_index,end_index):
+def generate_texts(args, paths, model, tokenizer, image_processor, prompt, start_index, end_index):
     file_names=[]
     texts=[]
     image_tensors=[]
@@ -39,20 +40,17 @@ def generate_texts(args,paths,model,tokenizer,image_processor,prompt,eos_token_i
     input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
     input_ids = torch.repeat_interleave(input_ids, repeats=image_tensor.size()[0], dim=0)
 
-    # print("input_ids",input_ids,  input_ids.size())
-
     with torch.inference_mode():
         output_ids = model.generate(
             input_ids,
             images=image_tensor,
             do_sample=True,
             temperature=args.temperature,
-            max_new_tokens=args.max_new_tokens,
-            eos_token_id=eos_token_id
+            max_new_tokens=args.max_new_tokens
         )
-    # print("output_ids",output_ids.size())
+
     for a in range(output_ids.size()[0]):
-        outputs = tokenizer.decode(output_ids[a, input_ids.shape[1]:]).strip()
+        outputs = tokenizer.decode(output_ids[a, input_ids.shape[1]:],skip_special_tokens=True).strip()
         texts.append(outputs)
         file_names.append(os.path.basename(paths[start_index+a]))
 
@@ -82,30 +80,34 @@ def main(args):
     else:
         args.conv_mode = conv_mode
 
+    conv = conv_templates[args.conv_mode].copy()
+
     paths = glob.glob(os.path.join(args.image_folder,"*.png"))
     paths += glob.glob(os.path.join(args.image_folder,"*.jpg"))
     paths += glob.glob(os.path.join(args.image_folder,"*.jpeg"))
-    paths +=  glob.glob(os.path.join(args.image_folder,"*.webp"))
+    paths += glob.glob(os.path.join(args.image_folder,"*.webp"))
 
     # first message
     if model.config.mm_use_im_start_end:
-        prompt = "USER: "+DEFAULT_IM_START_TOKEN+DEFAULT_IMAGE_TOKEN+DEFAULT_IM_END_TOKEN+"\n"+args.user_prompt+"\nASSISTANT:"
+        user_input = DEFAULT_IM_START_TOKEN+DEFAULT_IMAGE_TOKEN+DEFAULT_IM_END_TOKEN+"\n"+args.user_prompt
     else:
-        prompt = "USER: "+DEFAULT_IMAGE_TOKEN+"\n"+args.user_prompt+"\nASSISTANT:"
+        user_input = DEFAULT_IMAGE_TOKEN+"\n"+args.user_prompt
+
+    conv.append_message(conv.roles[0], user_input)
+    conv.append_message(conv.roles[1], None)
+    prompt = conv.get_prompt()
 
     bs=args.batch_size
     total_batch=len(paths)//bs
 
-    eos_token_id=tokenizer.encode("</s>")
-
     results={"file_name":[],"text":[]}
     for i in tqdm(range(total_batch)):
-        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,eos_token_id,i*bs,(i+1)*bs)
+        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,i*bs,(i+1)*bs)
         results["file_name"].extend(file_names)
         results["text"].extend(texts)
 
     if(len(paths)%bs!=0):
-        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,eos_token_id,total_batch*bs,len(paths))
+        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,total_batch*bs,len(paths))
         results["file_name"].extend(file_names)
         results["text"].extend(texts)
 
@@ -135,6 +137,9 @@ if __name__ == "__main__":
 # --user-prompt このイラストを日本語でできる限り詳細に説明してください。表情や髪の色、目の色、耳の種類、服装、服の色 など注意して説明してください。説明は反復を避けてください。\
 #  --image-folder '/mnt/NVM/test'  \
 # --output-csv '/mnt/NVM/test/metadata.csv'
+# --batch-size 4
+
+
 
 
 # python -m llava.serve.cli_batch --model-path '/mnt/sabrent/llava-v1.5-7b' \ 
