@@ -7,12 +7,65 @@ from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_S
 from llava.model.builder import load_pretrained_model
 from llava.utils import disable_torch_init
 from llava.mm_utils import process_images, tokenizer_image_token, get_model_name_from_path, KeywordsStoppingCriteria
+from llava.conversation import conv_templates, SeparatorStyle
 
 from PIL import Image
 
 import pandas as pd
 import glob
 from tqdm import tqdm
+
+def generate_texts(args,paths,model,tokenizer,image_processor,prompt,keywords,start_index,end_index):
+    file_names=[]
+    texts=[]
+    image_tensors=[]
+    for path in paths[start_index:end_index]:
+        image = Image.open(path)
+
+        # Check if the image has an alpha (transparency) channel
+        if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
+            # Create a new white background image
+            background = Image.new('RGB', image.size, (255, 255, 255))
+
+            # Paste the image onto the background using the alpha channel as a mask
+            background.paste(image, (0, 0), image)
+
+        # Similar operation in model_worker.py
+        image_tensor = process_images([image], image_processor, args)
+        image_tensors.append(image_tensor)
+
+    # print(image_tensor.size())
+    image_tensor = torch.cat(image_tensors, 0)
+    # print(image_tensor.size())
+    image_tensor = image_tensor.to(model.device, dtype=torch.float16)
+
+    input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
+    # print("input_ids",input_ids,  input_ids.size())
+    # input_ids=input_ids.repeat(15,0)
+    # input_ids=torch.cat([input_ids,input_ids],0)
+    input_ids = torch.repeat_interleave(input_ids, repeats=image_tensor.size()[0], dim=0)
+
+    # print("input_ids",input_ids,  input_ids.size())
+
+    with torch.inference_mode():
+        output_ids = model.generate(
+            input_ids,
+            images=image_tensor,
+            do_sample=True,
+            temperature=args.temperature,
+            max_new_tokens=args.max_new_tokens
+        )
+    # print("output_ids",output_ids.size())
+    for a in range(output_ids.size()[0]):
+        outputs = tokenizer.decode(output_ids[a, input_ids.shape[1]:]).strip()
+        # print(outputs)
+        texts.append(outputs)
+        file_names.append(os.path.basename(paths[start_index+a]))
+
+    if args.debug:
+        print("\n", {"outputs": outputs}, "\n")
+
+    return file_names,texts
 
 def main(args):
     # Model
@@ -39,107 +92,28 @@ def main(args):
     paths += glob.glob(os.path.join(args.image_folder,"*.jpg"))
     paths += glob.glob(os.path.join(args.image_folder,"*.jpeg"))
     paths +=  glob.glob(os.path.join(args.image_folder,"*.webp"))
-    prompt="USER: <image>\n"+args.user_prompt+"\nASSISTANT:"
-    file_names=[]
-    texts=[]
-    image_tensors=[]
+
+    # first message
+    if model.config.mm_use_im_start_end:
+        prompt = "USER: "+DEFAULT_IM_START_TOKEN+DEFAULT_IMAGE_TOKEN+DEFAULT_IM_END_TOKEN+"\n"+args.user_prompt+"\nASSISTANT:"
+    else:
+        prompt = "USER: "+DEFAULT_IMAGE_TOKEN+"\n"+args.user_prompt+"\nASSISTANT:"
 
     bs=args.batch_size
     total_batch=len(paths)//bs
+
+    results={"file_name":[],"text":[]}
     for i in tqdm(range(total_batch)):
-        for path in paths[i*bs:(i+1)*bs]:
-            image = Image.open(path)
-
-            # Check if the image has an alpha (transparency) channel
-            if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
-                # Create a new white background image
-                background = Image.new('RGB', image.size, (255, 255, 255))
-
-                # Paste the image onto the background using the alpha channel as a mask
-                background.paste(image, (0, 0), image)
-
-            # Similar operation in model_worker.py
-            image_tensor = process_images([image], image_processor, args)
-            image_tensors.append(image_tensor)
-
-        print(image_tensor.size())
-        image_tensor = torch.cat(image_tensors, 0)
-        print(image_tensor.size())
-        image_tensor = image_tensor.to(model.device, dtype=torch.float16)
-
-        input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
-        print("input_ids",input_ids,  input_ids.size())
-        # input_ids=input_ids.repeat(15,0)
-        # input_ids=torch.cat([input_ids,input_ids],0)
-        input_ids= torch.repeat_interleave(input_ids, repeats=image_tensor.size()[0], dim=0)
-        print("input_ids",input_ids,  input_ids.size())
-
-
-        with torch.inference_mode():
-            output_ids = model.generate(
-                input_ids,
-                images=image_tensor,
-                do_sample=True,
-                temperature=args.temperature,
-                max_new_tokens=args.max_new_tokens,
-            )
-        print("output_ids",output_ids.size())
-        for a in range(output_ids.size()[0]):
-            outputs = tokenizer.decode(output_ids[a, input_ids.shape[1]:]).strip()
-            print(outputs)
-            texts.append(outputs)
-            file_names.append(paths[a].split("/")[-1])
-
-        if args.debug:
-            print("\n", {"outputs": outputs}, "\n")
+        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,keywords,i*bs,(i+1)*bs)
+        results["file_name"].extend(file_names)
+        results["text"].extend(texts)
 
     if(len(paths)%bs!=0):
-        for path in paths[total_batch*bs:]:
-            image = Image.open(path)
+        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,total_batch*bs,keywords,len(paths))
+        results["file_name"].extend(file_names)
+        results["text"].extend(texts)
 
-            # Check if the image has an alpha (transparency) channel
-            if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
-                # Create a new white background image
-                background = Image.new('RGB', image.size, (255, 255, 255))
-
-                # Paste the image onto the background using the alpha channel as a mask
-                background.paste(image, (0, 0), image)
-
-            # Similar operation in model_worker.py
-            image_tensor = process_images([image], image_processor, args)
-            image_tensors.append(image_tensor)
-
-        print(image_tensor.size())
-        image_tensor = torch.cat(image_tensors, 0)
-        print(image_tensor.size())
-        image_tensor = image_tensor.to(model.device, dtype=torch.float16)
-
-        input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
-        print("input_ids", input_ids, input_ids.size())
-        # input_ids=input_ids.repeat(15,0)
-        # input_ids=torch.cat([input_ids,input_ids],0)
-        input_ids = torch.repeat_interleave(input_ids, repeats=image_tensor.size()[0], dim=0)
-        print("input_ids", input_ids, input_ids.size())
-
-        with torch.inference_mode():
-            output_ids = model.generate(
-                input_ids,
-                images=image_tensor,
-                do_sample=True,
-                temperature=args.temperature,
-                max_new_tokens=args.max_new_tokens,
-            )
-        print("output_ids", output_ids.size())
-        for a in range(output_ids.size()[0]):
-            outputs = tokenizer.decode(output_ids[a, input_ids.shape[1]:]).strip()
-            print(outputs)
-            texts.append(outputs)
-            file_names.append(paths[a].split("/")[-1])
-
-        if args.debug:
-            print("\n", {"outputs": outputs}, "\n")
-
-    pd.DataFrame({"file_name":file_names,"text":texts}).to_csv(args.output_csv,index=False)
+    pd.DataFrame(results).to_csv(args.output_csv,index=False)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -151,7 +125,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--conv-mode", type=str, default=None)
     parser.add_argument("--temperature", type=float, default=0.2)
-    parser.add_argument("--max-new-tokens", type=int, default=512)
+    parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
@@ -161,7 +135,7 @@ if __name__ == "__main__":
     main(args)
 
 # python -m llava.serve.cli_batch --model-path liuhaotian/llava-v1.5-13b \ 
-# --load-8bit \
+# --load-4bit \
 # --user-prompt このイラストを日本語でできる限り詳細に説明してください。表情や髪の色、目の色、耳の種類、服装、服の色 など注意して説明してください。説明は反復を避けてください。\
 #  --image-folder '/mnt/NVM/test'  \
 # --output-csv '/mnt/NVM/test/metadata.csv'
