@@ -108,11 +108,11 @@ if __name__ == "__main__":
 # --output-csv '/mnt/NVM/test/metadata.csv'
 
 
-python -m llava.serve.cli_batch --model-path '/mnt/sabrent/llava-v1.5-7b' \ 
---load-4bit \
---max-new-tokens 128 \
---user-prompt 'describe this image and its style in a highly detailed manner' \
---image-folder '/home/logan/ldb/r2'  \
---output-csv '/home/logan/thumperai/test.csv'
+#python -m llava.serve.cli_batch --model-path '/mnt/sabrent/llava-v1.5-7b' \
+#--load-4bit \
+#--max-new-tokens 128 \
+#--user-prompt 'describe this image and its style in a highly detailed manner' \
+#--image-folder '/home/logan/ldb/r2'  \
+#--output-csv '/home/logan/thumperai/test.csv'
 
 # 15images
