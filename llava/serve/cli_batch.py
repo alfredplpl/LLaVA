@@ -6,8 +6,7 @@ import torch
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from llava.model.builder import load_pretrained_model
 from llava.utils import disable_torch_init
-from llava.mm_utils import process_images, tokenizer_image_token, get_model_name_from_path, KeywordsStoppingCriteria
-from llava.conversation import conv_templates, SeparatorStyle
+from llava.mm_utils import process_images, tokenizer_image_token, get_model_name_from_path
 
 from PIL import Image
 
@@ -15,7 +14,7 @@ import pandas as pd
 import glob
 from tqdm import tqdm
 
-def generate_texts(args,paths,model,tokenizer,image_processor,prompt,keywords,start_index,end_index):
+def generate_texts(args,paths,model,tokenizer,image_processor,prompt,eos_token_id,start_index,end_index):
     file_names=[]
     texts=[]
     image_tensors=[]
@@ -34,15 +33,10 @@ def generate_texts(args,paths,model,tokenizer,image_processor,prompt,keywords,st
         image_tensor = process_images([image], image_processor, args)
         image_tensors.append(image_tensor)
 
-    # print(image_tensor.size())
     image_tensor = torch.cat(image_tensors, 0)
-    # print(image_tensor.size())
     image_tensor = image_tensor.to(model.device, dtype=torch.float16)
 
     input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
-    # print("input_ids",input_ids,  input_ids.size())
-    # input_ids=input_ids.repeat(15,0)
-    # input_ids=torch.cat([input_ids,input_ids],0)
     input_ids = torch.repeat_interleave(input_ids, repeats=image_tensor.size()[0], dim=0)
 
     # print("input_ids",input_ids,  input_ids.size())
@@ -54,12 +48,11 @@ def generate_texts(args,paths,model,tokenizer,image_processor,prompt,keywords,st
             do_sample=True,
             temperature=args.temperature,
             max_new_tokens=args.max_new_tokens,
-            eos_token_id=tokenizer.eos_token_id
+            eos_token_id=eos_token_id
         )
     # print("output_ids",output_ids.size())
     for a in range(output_ids.size()[0]):
         outputs = tokenizer.decode(output_ids[a, input_ids.shape[1]:]).strip()
-        # print(outputs)
         texts.append(outputs)
         file_names.append(os.path.basename(paths[start_index+a]))
 
@@ -103,14 +96,16 @@ def main(args):
     bs=args.batch_size
     total_batch=len(paths)//bs
 
+    eos_token_id=tokenizer.encode("</s>")
+
     results={"file_name":[],"text":[]}
     for i in tqdm(range(total_batch)):
-        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,i*bs,(i+1)*bs)
+        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,eos_token_id,i*bs,(i+1)*bs)
         results["file_name"].extend(file_names)
         results["text"].extend(texts)
 
     if(len(paths)%bs!=0):
-        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,total_batch*bs,len(paths))
+        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,eos_token_id,total_batch*bs,len(paths))
         results["file_name"].extend(file_names)
         results["text"].extend(texts)
 
