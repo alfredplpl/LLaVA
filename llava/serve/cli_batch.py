@@ -53,7 +53,8 @@ def generate_texts(args,paths,model,tokenizer,image_processor,prompt,keywords,st
             images=image_tensor,
             do_sample=True,
             temperature=args.temperature,
-            max_new_tokens=args.max_new_tokens
+            max_new_tokens=args.max_new_tokens,
+            eos_token_id=tokenizer.eos_token_id
         )
     # print("output_ids",output_ids.size())
     for a in range(output_ids.size()[0]):
@@ -104,12 +105,12 @@ def main(args):
 
     results={"file_name":[],"text":[]}
     for i in tqdm(range(total_batch)):
-        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,keywords,i*bs,(i+1)*bs)
+        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,i*bs,(i+1)*bs)
         results["file_name"].extend(file_names)
         results["text"].extend(texts)
 
     if(len(paths)%bs!=0):
-        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,total_batch*bs,keywords,len(paths))
+        file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,total_batch*bs,len(paths))
         results["file_name"].extend(file_names)
         results["text"].extend(texts)
 
