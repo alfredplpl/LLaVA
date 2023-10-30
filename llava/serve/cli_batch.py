@@ -11,6 +11,8 @@ from llava.conversation import conv_templates
 
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = 16384 * 16384
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 import pandas as pd
 import glob
