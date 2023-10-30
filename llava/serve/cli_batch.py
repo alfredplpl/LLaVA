@@ -10,6 +10,7 @@ from llava.mm_utils import process_images, tokenizer_image_token, get_model_name
 from llava.conversation import conv_templates
 
 from PIL import Image
+Image.MAX_IMAGE_PIXELS = 16384 * 16384
 
 import pandas as pd
 import glob
@@ -25,11 +26,12 @@ def generate_texts(args, paths, model, tokenizer, image_processor, prompt, start
         # Check if the image has an alpha (transparency) channel
         if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
             # Create a new white background image
-            background = Image.new('RGB', image.size, (255, 255, 255))
-
+            background = Image.new('RGBA', image.size, (255, 255, 255))
+            image = image.convert("RGBA")
             # Paste the image onto the background using the alpha channel as a mask
             background.paste(image, (0, 0), image)
 
+            image=background.convert("RGB")
         # Similar operation in model_worker.py
         image_tensor = process_images([image], image_processor, args)
         image_tensors.append(image_tensor)
@@ -105,6 +107,8 @@ def main(args):
         file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,i*bs,(i+1)*bs)
         results["file_name"].extend(file_names)
         results["text"].extend(texts)
+        if(i%args.save_every_n_steps==0):
+            pd.DataFrame(results).to_csv(args.output_csv, index=False)
 
     if(len(paths)%bs!=0):
         file_names, texts = generate_texts(args,paths,model,tokenizer,image_processor,prompt,total_batch*bs,len(paths))
@@ -125,6 +129,7 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--save-every-n-steps", type=int, default=100)
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
     parser.add_argument("--debug", action="store_true")
