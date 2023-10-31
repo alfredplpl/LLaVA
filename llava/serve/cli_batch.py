@@ -24,16 +24,13 @@ def generate_texts(args, paths, model, tokenizer, image_processor, prompt, start
     image_tensors=[]
     for path in paths[start_index:end_index]:
         image = Image.open(path)
+        # Create a new white background image
+        background = Image.new('RGBA', image.size, (255, 255, 255))
+        image = image.convert("RGBA")
+        # Paste the image onto the background using the alpha channel as a mask
+        background.paste(image, (0, 0), image)
 
-        # Check if the image has an alpha (transparency) channel
-        if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
-            # Create a new white background image
-            background = Image.new('RGBA', image.size, (255, 255, 255))
-            image = image.convert("RGBA")
-            # Paste the image onto the background using the alpha channel as a mask
-            background.paste(image, (0, 0), image)
-
-            image=background.convert("RGB")
+        image=background.convert("RGB")
         # Similar operation in model_worker.py
         image_tensor = process_images([image], image_processor, args)
         image_tensors.append(image_tensor)
@@ -90,6 +87,13 @@ def main(args):
     paths += glob.glob(os.path.join(args.image_folder,"*.jpg"))
     paths += glob.glob(os.path.join(args.image_folder,"*.jpeg"))
     paths += glob.glob(os.path.join(args.image_folder,"*.webp"))
+
+    # remove broken image
+    #for path in tqdm(paths):
+    #    try:
+    #        Image.open(path)
+    #    except:
+    #        os.remove(path)
 
     # first message
     if model.config.mm_use_im_start_end:
